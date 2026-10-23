@@ -1,0 +1,40 @@
+# Demo config: runs against the two SQLite files built by demo/make_demo.py
+# (relative paths are relative to this file's folder)
+settings:
+  output_dir: output
+  parallel_tables: 2
+  bucket_size: 20000
+  spot_check_buckets: 2
+  max_diff_rows: 1000
+
+connections:
+  dwh: { type: sqlite, path: dwh.db }
+  mis: { type: sqlite, path: mis.db }
+
+tables:
+  - name: policy_master
+    source: { connection: dwh, table: POLICY_MASTER }
+    target: { connection: mis, table: POLICY_MASTER }
+    keys: [POLICY_NO]
+    key_type: text
+    partition: { column: ISSUE_DATE, grain: month }
+    columns:
+      PREMIUM: number
+      SUM_ASSURED: number
+      STATUS: text
+      AGENT_CODE: { type: text, ignore_case: true }
+      PRODUCT: text
+      BRANCH: text
+      REMARKS: text
+      ISSUE_DATE: date
+
+  - name: agent_master
+    source: { connection: dwh, table: AGENT_MASTER }
+    target: { connection: mis, table: AGENT_MASTER }
+    keys: [AGENT_ID]
+    key_type: number
+    columns:
+      AGENT_NAME: { type: text, target: AGNT_NAME }
+      BRANCH: text
+      JOIN_DATE: date
+      ACTIVE: text

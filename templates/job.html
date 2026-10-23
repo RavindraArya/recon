@@ -1,0 +1,76 @@
+{% extends "base.html" %}
+{% block title %}{{ 'Connection test' if job.kind=='check' else 'Run ' ~ job.id }}{% endblock %}
+{% block body %}
+<div class="head">
+  <div>
+    <h1>{{ 'Connection test' if job.kind=='check' else 'Recon run' }}
+      <span class="chip {{ job.status }}" id="status">{{ job.status }}</span></h1>
+    <div class="sub mono">{{ job.id }}</div>
+  </div>
+  <div class="actions">
+    <a class="btn primary" id="results" href="{{ url_for('run_detail', run_id=job.id) }}" {% if not has_results %}hidden{% endif %}>View results</a>
+    {% if can_run %}
+    <form method="post" action="{{ url_for('job_stop', job_id=job.id) }}" id="stopform" {% if job.status!='RUNNING' %}hidden{% endif %}
+          onsubmit="return confirm('Stop this run? Queries already sent to the databases will be cancelled.');">
+      <button class="btn danger">Stop</button>
+    </form>
+    {% endif %}
+    <a class="btn" href="{{ url_for('dashboard') }}">Back to dashboard</a>
+  </div>
+</div>
+
+<div class="panel"><div class="pb meta">
+  <div><span>Started by</span>{{ job.user }}</div>
+  <div><span>Started</span>{{ job.started }}</div>
+  <div><span>Finished</span><b id="ended">{{ job.ended or '-' }}</b></div>
+  <div><span>Duration</span><b id="dur">{{ job|dur }}</b></div>
+  {% if job.kind=='run' %}
+  <div><span>Level</span>{{ job.level }}</div>
+  <div style="grid-column: span 2"><span>Tables</span>{{ job.tables|join(', ') }}</div>
+  {% endif %}
+</div></div>
+
+<div class="banner warn" id="hint" hidden></div>
+
+<div class="panel">
+  <div class="ph"><h2>Log</h2><div class="right"><label class="inline"><input type="checkbox" id="follow" checked> Follow</label></div></div>
+  <pre class="log" id="log">{{ log }}</pre>
+</div>
+{% endblock %}
+{% block scripts %}
+<script>
+(function () {
+  var url = "{{ url_for('job_api', job_id=job.id) }}";
+  var logEl = document.getElementById('log'), statusEl = document.getElementById('status');
+  var follow = document.getElementById('follow');
+  var hints = {
+    'MISMATCH': 'Differences were found. Open the results to see which rows and columns.',
+    'ERROR': 'At least one table could not be checked. The log above shows the reason; "Test connections" helps for connection problems.',
+    'FAILED': 'One or more connections failed. Each FAIL line above says what to fix.',
+    'STOPPED': 'This run was stopped before it finished.'
+  };
+  function scroll() { if (follow.checked) logEl.scrollTop = logEl.scrollHeight; }
+  function show(j) {
+    logEl.textContent = j.log; scroll();
+    statusEl.textContent = j.status; statusEl.className = 'chip ' + j.status;
+    document.getElementById('ended').textContent = j.ended || '-';
+    if (j.duration) document.getElementById('dur').textContent = j.duration;
+    if (j.status !== 'RUNNING') {
+      var sf = document.getElementById('stopform'); if (sf) sf.hidden = true;
+      if (j.has_results) document.getElementById('results').hidden = false;
+      var h = document.getElementById('hint');
+      if (hints[j.status]) { h.textContent = hints[j.status]; h.hidden = false; }
+    }
+  }
+  function poll() {
+    fetch(url, { credentials: 'same-origin' }).then(function (r) { return r.json(); }).then(function (j) {
+      show(j);
+      if (j.status === 'RUNNING') setTimeout(poll, 1500);
+      else setTimeout(function () { location.reload(); }, 400);
+    }).catch(function () { setTimeout(poll, 4000); });
+  }
+  scroll();
+  {% if job.status == 'RUNNING' %}poll();{% else %}show({log: logEl.textContent, status: "{{ job.status }}", ended: "{{ job.ended or '' }}", has_results: {{ 'true' if has_results else 'false' }}});{% endif %}
+})();
+</script>
+{% endblock %}

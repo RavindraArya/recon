@@ -1,0 +1,127 @@
+{% extends "base.html" %}
+{% block title %}Dashboard{% endblock %}
+{% block body %}
+<div class="head">
+  <div>
+    <h1>Dashboard</h1>
+    <div class="sub">
+      {% if last_run %}Last run {{ last_run.run_time }} by {{ last_run.user }}{% else %}No runs yet{% endif %}
+      {% if last_check %} · Last connection test {{ last_check.started }}: <span class="chip {{ last_check.status }}">{{ last_check.status }}</span>{% endif %}
+    </div>
+  </div>
+  <div class="actions">
+    <form method="post" action="{{ url_for('check') }}">
+      <button class="btn" {{ 'disabled' if busy or not can_run }} title="Runs recon.py --check">
+        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M5 12l5 5L20 7"/></svg>
+        Test connections</button>
+    </form>
+  </div>
+</div>
+
+{% if msg %}<div class="banner warn">{{ msg }}</div>{% endif %}
+{% if busy %}
+<div class="banner info">
+  <span class="chip RUNNING">RUNNING</span>
+  <span>{{ 'Connection test' if busy.kind=='check' else 'Recon of ' ~ (busy.tables|join(', ')) }} started by <b>{{ busy.user }}</b> at {{ busy.started[11:16] }}</span>
+  <a class="right btn" href="{{ url_for('job_page', job_id=busy.id) }}">View live log</a>
+</div>
+{% endif %}
+
+<div class="kpis">
+  <div class="kpi"><div class="l">Tables configured</div><div class="v">{{ tables|length }}</div><div class="s">in recon_config.yaml</div></div>
+  <div class="kpi ok"><div class="l">Matched</div><div class="v">{{ counts.MATCHED }}</div><div class="s">at last check</div></div>
+  <div class="kpi bad"><div class="l">Mismatched</div><div class="v">{{ counts.MISMATCH }}</div><div class="s">need attention</div></div>
+  <div class="kpi warn"><div class="l">Errors</div><div class="v">{{ counts.ERROR }}</div><div class="s">could not complete</div></div>
+  <div class="kpi"><div class="l">Never run</div><div class="v">{{ counts.never }}</div><div class="s">no result yet</div></div>
+</div>
+
+<form method="post" action="{{ url_for('run') }}" class="panel" id="runform">
+  <div class="ph">
+    <h2>Tables</h2>
+    <span class="sub" id="selcount">0 selected</span>
+    <div class="right">
+      <label class="inline">Check level
+        <select name="level">
+          <option value="1" {{ 'selected' if level|string=='1' }}>1 · Row counts (fastest)</option>
+          <option value="2" {{ 'selected' if level|string=='2' }}>2 · Counts + aggregates</option>
+          <option value="3" {{ 'selected' if level|string=='3' }}>3 · Full, with row-level differences</option>
+        </select>
+      </label>
+      <button class="btn primary" id="runbtn" disabled data-busy="{{ 1 if busy or not can_run else 0 }}">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><path d="M7 4v16l13-8z"/></svg>
+        Run selected</button>
+    </div>
+  </div>
+  {% if tables %}
+  <div class="wrap"><table>
+    <thead><tr>
+      <th class="cb"><input type="checkbox" id="all" title="Select all"></th>
+      <th>Table</th><th>Source</th><th>Target</th><th>Status</th><th>Last checked</th>
+      <th class="n">Source rows</th><th class="n">Target rows</th><th class="n">Differences</th><th></th>
+    </tr></thead>
+    <tbody>
+    {% for t in tables %}
+      {% set l = t.last %}
+      <tr>
+        <td class="cb"><input type="checkbox" name="tables" value="{{ t.name }}" class="pick" {{ 'disabled' if not t.enabled }}></td>
+        <td><b>{{ t.name }}</b>{% if not t.enabled %} <span class="muted">(disabled)</span>{% endif %}</td>
+        <td class="mono">{{ t.source }}</td>
+        <td class="mono">{{ t.target }}</td>
+        <td><span class="chip {{ l.status if l else 'never' }}">{{ l.status if l else 'NOT RUN' }}</span></td>
+        <td class="nowrap muted">{{ l.run_time if l else '-' }}</td>
+        <td class="n">{{ l.source_rows|num if l else '' }}</td>
+        <td class="n">{{ l.target_rows|num if l else '' }}</td>
+        <td class="n">{% if l %}{{ (l.missing_in_target + l.extra_in_target + l.value_mismatches + l.duplicate_keys + (l.moved_partition or 0))|num }}{% endif %}</td>
+        <td class="nowrap">{% if l %}<a href="{{ url_for('run_detail', run_id=l.run_id) }}">Details</a>{% endif %}</td>
+      </tr>
+    {% endfor %}
+    </tbody>
+  </table></div>
+  {% else %}
+  <div class="empty">No tables in recon_config.yaml yet.</div>
+  {% endif %}
+</form>
+
+<div class="panel">
+  <div class="ph"><h2>Recent activity</h2><div class="right"><a href="{{ url_for('runs_page') }}">All runs</a></div></div>
+  {% if jobs %}
+  <div class="wrap"><table>
+    <thead><tr><th>Started</th><th>By</th><th>Action</th><th>Tables</th><th>Status</th><th class="n">Duration</th><th></th></tr></thead>
+    <tbody>
+    {% for j in jobs %}
+      <tr>
+        <td class="nowrap">{{ j.started }}</td>
+        <td>{{ j.user }}</td>
+        <td>{{ 'Connection test' if j.kind=='check' else 'Recon · level ' ~ j.level }}</td>
+        <td class="muted">{{ j.tables|join(', ') if j.tables else '-' }}</td>
+        <td><span class="chip {{ j.status }}">{{ j.status }}</span></td>
+        <td class="n">{{ j|dur }}</td>
+        <td class="nowrap"><a href="{{ url_for('job_page', job_id=j.id) }}">Log</a></td>
+      </tr>
+    {% endfor %}
+    </tbody>
+  </table></div>
+  {% else %}<div class="empty">Nothing started from the browser yet.</div>{% endif %}
+</div>
+{% endblock %}
+{% block scripts %}
+<script>
+(function () {
+  var picks = Array.prototype.slice.call(document.querySelectorAll('.pick:not([disabled])'));
+  var all = document.getElementById('all'), btn = document.getElementById('runbtn'),
+      cnt = document.getElementById('selcount');
+  if (!btn) return;
+  var blocked = btn.getAttribute('data-busy') === '1';
+  function sync() {
+    var n = picks.filter(function (p) { return p.checked; }).length;
+    cnt.textContent = n + ' selected';
+    btn.disabled = blocked || n === 0;
+    if (all) { all.checked = n > 0 && n === picks.length; all.indeterminate = n > 0 && n < picks.length; }
+  }
+  picks.forEach(function (p) { p.addEventListener('change', sync); });
+  if (all) all.addEventListener('change', function () { picks.forEach(function (p) { p.checked = all.checked; }); sync(); });
+  document.getElementById('runform').addEventListener('submit', function () { btn.disabled = true; btn.textContent = 'Starting…'; });
+  sync();
+})();
+</script>
+{% endblock %}

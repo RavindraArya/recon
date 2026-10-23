@@ -1,0 +1,106 @@
+{% extends "base.html" %}
+{% block title %}Run {{ d.run_id }}{% endblock %}
+{% block body %}
+<div class="head">
+  <div>
+    <h1>Run results <span class="chip {{ status }}">{{ status }}</span></h1>
+    <div class="sub">{{ d.run_time }} · level {{ d.level }} · started by {{ job.user if job else 'command line / schedule' }}
+      · <span class="mono">{{ d.run_id }}</span></div>
+  </div>
+  <div class="actions">
+    {% if files.xlsx %}<a class="btn" href="{{ url_for('download', name='recon_' ~ d.run_id ~ '.xlsx') }}">Excel</a>{% endif %}
+    {% if files.html %}<a class="btn" href="{{ url_for('download', name='recon_' ~ d.run_id ~ '.html') }}">HTML report</a>{% endif %}
+    {% if job %}<a class="btn" href="{{ url_for('job_page', job_id=d.run_id) }}">Log</a>{% endif %}
+  </div>
+</div>
+
+<div class="panel">
+  <div class="ph"><h2>Tables</h2></div>
+  <div class="wrap"><table>
+    <thead><tr><th>Table</th><th>Status</th><th>Source</th><th>Target</th>
+      <th class="n">Source rows</th><th class="n">Target rows</th><th class="n">Row diff</th>
+      <th class="n">Missing</th><th class="n">Extra</th><th class="n">Value diffs</th><th class="n">Moved</th><th class="n">Dup. keys</th><th class="n">Time</th></tr></thead>
+    <tbody>
+    {% for s in d.summary %}
+      <tr>
+        <td><b>{{ s.table }}</b></td>
+        <td><span class="chip {{ s.status }}">{{ s.status }}</span></td>
+        <td class="mono">{{ s.source }}</td>
+        <td class="mono">{{ s.target }}</td>
+        <td class="n">{{ s.source_rows|num }}</td>
+        <td class="n">{{ s.target_rows|num }}</td>
+        <td class="n">{{ s.row_diff|num }}</td>
+        <td class="n">{{ s.missing_in_target|num }}</td>
+        <td class="n">{{ s.extra_in_target|num }}</td>
+        <td class="n">{{ s.value_mismatches|num }}</td>
+        <td class="n">{{ (s.moved_partition or 0)|num }}</td>
+        <td class="n">{{ s.duplicate_keys|num }}</td>
+        <td class="n">{{ '%.1f'|format(s.seconds|float) }}s</td>
+      </tr>
+      {% if s.error %}<tr><td></td><td colspan="12" style="color:var(--warn)">{{ s.error }}</td></tr>{% endif %}
+    {% endfor %}
+    </tbody>
+  </table></div>
+</div>
+
+<div class="panel">
+  <div class="ph"><h2>Mismatched partitions</h2><span class="sub">{{ bad_parts|length }}</span></div>
+  {% if bad_parts %}
+  <div class="wrap"><table>
+    <thead><tr><th>Table</th><th>Partition</th><th class="n">Source rows</th><th class="n">Target rows</th><th class="n">Row diff</th><th>Failed checks</th><th>Note</th></tr></thead>
+    <tbody>{% for p in bad_parts %}
+      <tr><td>{{ p.table }}</td><td class="mono">{{ p.partition }}</td>
+        <td class="n">{{ p.source_rows|num }}</td><td class="n">{{ p.target_rows|num }}</td><td class="n">{{ p.row_diff|num }}</td>
+        <td title="{{ p.failed_checks }}">{{ p.failed_checks|checks }}</td><td>{{ p.note or '' }}</td></tr>
+    {% endfor %}</tbody>
+  </table></div>
+  {% else %}<div class="empty">Every partition matched.</div>{% endif %}
+</div>
+
+<div class="panel">
+  <div class="ph">
+    <h2>Differences</h2><span class="sub" id="dcount">{{ d.differences|length }} rows</span>
+    <div class="right">
+      <select id="ftable"><option value="">All tables</option>{% for t in table_names %}<option>{{ t }}</option>{% endfor %}</select>
+      <select id="fissue"><option value="">All issues</option>{% for i in issues %}<option>{{ i }}</option>{% endfor %}</select>
+      <input type="search" id="fq" placeholder="Search key, column or value">
+    </div>
+  </div>
+  {% if d.differences %}
+  <div class="wrap"><table id="dtable">
+    <thead><tr><th>Table</th><th>Partition</th><th>Key</th><th>Issue</th><th>Column</th><th>Source value</th><th>Target value</th></tr></thead>
+    <tbody>{% for x in d.differences %}
+      <tr data-t="{{ x.table }}" data-i="{{ x.issue }}">
+        <td>{{ x.table }}</td><td class="mono">{{ x.partition }}</td><td class="mono"><b>{{ x.key }}</b></td>
+        <td><span class="chip {{ 'MISMATCH' if x.issue=='VALUE_MISMATCH' else 'ERROR' if 'DUPLICATE' in x.issue else 'STOPPED' if x.issue=='MOVED_PARTITION' else 'FAILED' }}">{{ x.issue }}</span></td>
+        <td>{{ x.column or '' }}</td>
+        <td class="mono">{{ '' if x.source_value is none else x.source_value }}</td>
+        <td class="mono">{{ '' if x.target_value is none else x.target_value }}</td>
+      </tr>
+    {% endfor %}</tbody>
+  </table></div>
+  <div class="empty" id="dnone" hidden>No differences match the filter.</div>
+  {% else %}<div class="empty">No row-level differences recorded{% if d.level < 3 %} (row-level details need level 3){% endif %}.</div>{% endif %}
+</div>
+{% endblock %}
+{% block scripts %}
+<script>
+(function () {
+  var rows = Array.prototype.slice.call(document.querySelectorAll('#dtable tbody tr'));
+  if (!rows.length) return;
+  var ft = document.getElementById('ftable'), fi = document.getElementById('fissue'),
+      fq = document.getElementById('fq'), cnt = document.getElementById('dcount'), none = document.getElementById('dnone');
+  function apply() {
+    var t = ft.value, i = fi.value, q = fq.value.trim().toLowerCase(), n = 0;
+    rows.forEach(function (r) {
+      var ok = (!t || r.getAttribute('data-t') === t) && (!i || r.getAttribute('data-i') === i) &&
+               (!q || r.textContent.toLowerCase().indexOf(q) >= 0);
+      r.hidden = !ok; if (ok) n++;
+    });
+    cnt.textContent = n + ' of ' + rows.length + ' rows'; none.hidden = n > 0;
+  }
+  [ft, fi].forEach(function (e) { e.addEventListener('change', apply); });
+  fq.addEventListener('input', apply);
+})();
+</script>
+{% endblock %}

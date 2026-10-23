@@ -1,0 +1,31 @@
+{% extends "base.html" %}
+{% block title %}Configuration{% endblock %}
+{% block body %}
+<div class="head">
+  <div><h1>Configuration</h1><div class="sub mono">{{ config_path }}</div></div>
+</div>
+<div class="banner info">Read-only view. To add tables or change connections, edit recon_config.yaml on the server; the dashboard picks up changes on the next page load. Passwords are never shown.</div>
+
+<div class="panel">
+  <div class="ph"><h2>Connections</h2></div>
+  <div class="pb grid2">
+  {% for name, c in connections.items() %}
+    <div>
+      <h2 style="margin-bottom:8px">{{ name }}</h2>
+      <dl class="kv">{% for k, v in c.items() %}<dt>{{ k }}</dt><dd class="mono">{{ v }}</dd>{% endfor %}</dl>
+    </div>
+  {% endfor %}
+  </div>
+</div>
+
+<div class="panel">
+  <div class="ph"><h2>Table pairs</h2><span class="sub">{{ tables|length }}</span></div>
+  <div class="wrap"><table>
+    <thead><tr><th>Name</th><th>Source</th><th>Target</th><th>Partition column</th><th class="n">Columns compared</th><th>Enabled</th></tr></thead>
+    <tbody>{% for t in tables %}
+      <tr><td><b>{{ t.name }}</b></td><td class="mono">{{ t.source }}</td><td class="mono">{{ t.target }}</td>
+        <td class="mono">{{ t.partition }}</td><td class="n">{{ t.columns }}</td><td>{{ 'Yes' if t.enabled else 'No' }}</td></tr>
+    {% endfor %}</tbody>
+  </table></div>
+</div>
+{% endblock %}

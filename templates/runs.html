@@ -1,0 +1,47 @@
+{% extends "base.html" %}
+{% block title %}Run history{% endblock %}
+{% block body %}
+<div class="head">
+  <div><h1>Run history</h1><div class="sub">Runs started from the browser, the command line and the scheduler</div></div>
+  <div class="actions"><a class="btn" href="{{ url_for('download', name='recon_history.csv') }}">Download history (CSV)</a></div>
+</div>
+
+<div class="panel">
+  <div class="ph"><h2>Recon runs</h2><span class="sub">{{ runs|length }} shown</span></div>
+  {% if runs %}
+  <div class="wrap"><table>
+    <thead><tr><th>Run time</th><th>Started by</th><th class="n">Level</th><th class="n">Tables</th><th>Result</th>
+      <th class="n">Matched</th><th class="n">Mismatched</th><th class="n">Errors</th><th class="n">Longest table</th><th></th></tr></thead>
+    <tbody>
+    {% for r in runs %}
+      <tr>
+        <td class="nowrap">{{ r.run_time }}</td>
+        <td>{{ r.user }}</td>
+        <td class="n">{{ r.level or '' }}</td>
+        <td class="n">{{ r.tables }}</td>
+        <td><span class="chip {{ r.status }}">{{ r.status }}</span></td>
+        <td class="n">{{ r.matched }}</td>
+        <td class="n">{{ r.mismatched }}</td>
+        <td class="n">{{ r.errors }}</td>
+        <td class="n">{{ '%.1f'|format(r.seconds|float) }}s</td>
+        <td class="nowrap"><a href="{{ url_for('run_detail', run_id=r.run_id) }}">Open</a></td>
+      </tr>
+    {% endfor %}
+    </tbody>
+  </table></div>
+  {% else %}<div class="empty">No runs yet.</div>{% endif %}
+</div>
+
+<div class="panel">
+  <div class="ph"><h2>Connection tests</h2></div>
+  {% if jobs %}
+  <div class="wrap"><table>
+    <thead><tr><th>Started</th><th>By</th><th>Result</th><th></th></tr></thead>
+    <tbody>{% for j in jobs %}
+      <tr><td class="nowrap">{{ j.started }}</td><td>{{ j.user }}</td><td><span class="chip {{ j.status }}">{{ j.status }}</span></td>
+        <td><a href="{{ url_for('job_page', job_id=j.id) }}">Log</a></td></tr>
+    {% endfor %}</tbody>
+  </table></div>
+  {% else %}<div class="empty">No connection tests yet.</div>{% endif %}
+</div>
+{% endblock %}

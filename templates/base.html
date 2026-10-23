@@ -1,0 +1,30 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{% block title %}Recon{% endblock %} · Data Reconciliation</title>
+<link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+</head>
+<body>
+<header class="top"><div class="in">
+  <div class="logo">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><ellipse cx="7" cy="6" rx="4" ry="2"/><path d="M3 6v8c0 1.1 1.8 2 4 2s4-.9 4-2V6"/><ellipse cx="17" cy="10" rx="4" ry="2"/><path d="M13 10v8c0 1.1 1.8 2 4 2s4-.9 4-2v-8"/></svg>
+    Data Reconciliation
+  </div>
+  <nav>
+    <a href="{{ url_for('dashboard') }}" class="{{ 'on' if request.endpoint=='dashboard' }}">Dashboard</a>
+    <a href="{{ url_for('runs_page') }}" class="{{ 'on' if request.endpoint in ('runs_page','run_detail') }}">Run history</a>
+    <a href="{{ url_for('config_page') }}" class="{{ 'on' if request.endpoint=='config_page' }}">Configuration</a>
+  </nav>
+  <div class="who">
+    {% if busy %}<a class="pulse" href="{{ url_for('job_page', job_id=busy.id) }}">{{ 'Checking' if busy.kind=='check' else 'Running' }}…</a>{% endif %}
+    <span class="u">{{ user }}{% if not can_run %} (view only){% endif %}</span>
+  </div>
+</div></header>
+<main>
+{% block body %}{% endblock %}
+</main>
+{% block scripts %}{% endblock %}
+</body>
+</html>

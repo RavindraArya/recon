@@ -1,0 +1,112 @@
+# =============================================================================
+# Reconciliation config
+# Replace every xxxx with your real value (the comment on each line says what goes there).
+# The tool refuses to run while any xxxx is left, and tells you which one.
+# Passwords do NOT go in this file - they go in .env (DWH_PWD=..., MIS_PWD=..., RECON_PWD=...).
+# Test with:   python recon.py -c recon_config.yaml --check
+# =============================================================================
+
+settings:
+  output_dir: recon_output        # Excel + HTML report + recon_history.csv + recon.log go here
+  level: 3                        # 1 = counts, 2 = + aggregates, 3 = + row-level drill-down
+  parallel_tables: 4              # how many table pairs run at the same time
+  bucket_size: 20000              # rows per bucket when drilling into a mismatched partition
+  spot_check_buckets: 2           # random buckets row-compared per table even when all matches
+  max_diff_rows: 1000             # difference rows kept in the report per table
+  max_fetch_rows: 2000000         # safety cap on rows pulled per table during drill-down
+  number_scale: 2                 # default decimal places for number columns
+  text_signature: true            # set false if text columns hold non-English characters
+
+  # Save every run's results in database tables (RECON_SUMMARY / RECON_PARTITIONS /
+  # RECON_DIFFERENCES). Create them first with sql/recon_tables_mssql.sql.
+  # To switch off, put a # in front of these four lines.
+  results_db:
+    connection: recon_db
+    schema: dbo                   # schema where you created the RECON_* tables (usually dbo)
+    table_prefix: RECON_
+
+connections:
+
+  # ---------------------------------------------------------------------------
+  # SOURCE: Oracle DWH          (needs: pip install oracledb)
+  # Find these in SQL Developer: right-click your connection -> Properties
+  # ---------------------------------------------------------------------------
+  dwh:
+    type: oracle
+    host: xxxx                    # Oracle server name or IP, e.g. dwhdb01.company.local or 10.20.30.40
+    port: 1521                    # change only if your DBA gave a different port
+    service_name: xxxx            # Oracle service name, e.g. DWHPRD
+                                  # (if you connect with a SID instead, delete this line and write:  sid: xxxx)
+    user: xxxx                    # Oracle user name (ideally a read-only user)
+    password_env: DWH_PWD         # name of the line in .env that holds this password - leave as is
+    # thick_mode: true            # only if --check says the database needs 'thick mode'
+    # client_lib_dir: 'C:\oracle\instantclient_23_5'   # folder of Oracle Instant Client (thick mode only)
+
+  # ---------------------------------------------------------------------------
+  # TARGET: SQL Server MIS      (needs: pip install pyodbc + a Microsoft ODBC driver)
+  # Find these in SSMS: the "Server name" box on the login screen
+  # ---------------------------------------------------------------------------
+  mis:
+    type: mssql
+    server: 'xxxx'                # server name exactly as typed in SSMS, e.g. 'MISSRV01'
+                                  # or with instance 'MISSRV01\SQL2019'  (keep the single quotes)
+    # port: 1433                  # only if you normally type a port; remove the # to use it
+    database: xxxx                # database name, e.g. MISDB
+    driver: xxxx                  # copy one name exactly from the output of:
+                                  #   python -c "import pyodbc; print(pyodbc.drivers())"
+                                  # e.g.  ODBC Driver 18 for SQL Server   (no quotes or + signs needed)
+    windows_auth: false           # true  = Windows login (then delete the user line below, no password needed)
+                                  # false = SQL Server login with user + password
+    user: xxxx                    # SQL Server login name (read-only is enough)
+    password_env: MIS_PWD         # name of the line in .env that holds this password - leave as is
+
+  # ---------------------------------------------------------------------------
+  # RESULTS: where RECON_* tables are written (needs INSERT rights on them)
+  # Usually the same server and database as 'mis' above, with a user that can write.
+  # ---------------------------------------------------------------------------
+  recon_db:
+    type: mssql
+    server: 'xxxx'                # same as mis server above (if results live there)
+    database: xxxx                # database where you created the RECON_* tables
+    driver: xxxx                  # same driver name as above
+    windows_auth: false           # same meaning as above
+    user: xxxx                    # login that has INSERT on the RECON_* tables
+    password_env: RECON_PWD       # name of the line in .env that holds this password - leave as is
+    pool_size: 2
+
+# =============================================================================
+# TABLE PAIRS TO COMPARE - start with one, add more blocks later (copy the block)
+# =============================================================================
+tables:
+
+  - name: xxxx                    # short name for the report, e.g. policy_master (no spaces)
+    source:
+      connection: dwh
+      table: xxxx                 # Oracle table with schema, e.g. DWH.POLICY_MASTER
+      # filter: "ISSUE_DATE >= TRUNC(SYSDATE) - 90"            # optional, Oracle SQL, e.g. last 90 days
+    target:
+      connection: mis
+      table: xxxx                 # SQL Server table with schema, e.g. dbo.POLICY_MASTER
+      # filter: "ISSUE_DATE >= DATEADD(DAY, -90, CAST(GETDATE() AS DATE))"   # optional, SQL Server SQL
+    keys: [xxxx]                  # unique key column(s), e.g. [POLICY_NO] or [POLICY_NO, RIDER_CODE]
+    key_type: text                # text = key has letters (P1000123); number = whole numbers only (123456)
+    partition:                    # optional - delete these 3 lines for small tables
+      column: xxxx                # a date column to slice by, e.g. ISSUE_DATE (best if indexed)
+      grain: month                # day | month | value
+    columns:                      # columns to compare: NAME: number | text | date | datetime
+      xxxx: number                # e.g. PREMIUM: number
+      xxxx: text                  # e.g. STATUS: text
+      xxxx: date                  # e.g. ISSUE_DATE: date
+      # Different column name in target:  AGENT_CD: { type: text, target: AGENT_CODE }
+      # Ignore upper/lower case:          BRANCH:   { type: text, ignore_case: true }
+      # Allow rounding difference:        SUM_ASSURED: { type: number, tolerance: 0.01 }
+
+  # ---- Second table: copy this block, remove the # signs and fill in --------
+  # - name: agent_master
+  #   source: { connection: dwh, table: DWH.AGENT_MASTER }
+  #   target: { connection: mis, table: dbo.AGENT_MASTER }
+  #   keys: [AGENT_ID]
+  #   key_type: number
+  #   columns:
+  #     AGENT_NAME: text
+  #     JOIN_DATE: date

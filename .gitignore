@@ -1,0 +1,5 @@
+.env
+recon_output/
+__pycache__/
+demo/*.db
+demo/output/
