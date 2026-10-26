@@ -1,0 +1,674 @@
+<title>Recon Call Graph</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@400;500;600;700&display=swap">
+<style>
+/* Layout: toolbar on top, graph canvas (pan/zoom) left, detail panel right; stacks on phones */
+:root {
+  --bg: #f3f5f6; --panel: #ffffff; --ink: #172026; --muted: #5d6b75; --line: #dde3e7;
+  --node: #ffffff; --node-line: #c9d2d8; --edge: #b4bfc6; --hi: #0f6d8c; --up: #b4541a;
+  --dim: 0.16; --grid: #e6eaed; --chip: #eef2f4;
+  --g-cli: #2f6fb3; --g-conn: #7a4fb4; --g-config: #a2468b; --g-sql: #0f8a8a; --g-dialect: #5c8f2e;
+  --g-compare: #b07a12; --g-engine: #c4472b; --g-report: #3d7f5a;
+  --g-web: #1d5f7a; --g-route: #b0336b; --g-jobs: #6a5acd; --g-results: #8a6d3b; --g-browser: #4a5560;
+  --sans: "IBM Plex Sans", "Segoe UI", system-ui, sans-serif;
+  --mono: "IBM Plex Mono", Consolas, "Cascadia Mono", monospace;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #11171b; --panel: #172026; --ink: #e3e9ed; --muted: #95a3ad; --line: #26323a;
+    --node: #1b252c; --node-line: #34434d; --edge: #45545e; --hi: #4fc0e0; --up: #f0965a;
+    --grid: #1a2329; --chip: #222d34;
+    --g-cli: #6aa6e8; --g-conn: #a98be0; --g-config: #d97cbf; --g-sql: #4cc4c4; --g-dialect: #93c463;
+    --g-compare: #e0ad4a; --g-engine: #f07a5e; --g-report: #6cc08f;
+    --g-web: #5fb0d0; --g-route: #e57aa6; --g-jobs: #a99bf0; --g-results: #c9a46a; --g-browser: #9aa6b0;
+    color-scheme: dark;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #11171b; --panel: #172026; --ink: #e3e9ed; --muted: #95a3ad; --line: #26323a;
+  --node: #1b252c; --node-line: #34434d; --edge: #45545e; --hi: #4fc0e0; --up: #f0965a;
+  --grid: #1a2329; --chip: #222d34;
+  --g-cli: #6aa6e8; --g-conn: #a98be0; --g-config: #d97cbf; --g-sql: #4cc4c4; --g-dialect: #93c463;
+  --g-compare: #e0ad4a; --g-engine: #f07a5e; --g-report: #6cc08f;
+  --g-web: #5fb0d0; --g-route: #e57aa6; --g-jobs: #a99bf0; --g-results: #c9a46a; --g-browser: #9aa6b0;
+  color-scheme: dark;
+}
+* { box-sizing: border-box; }
+body { background: var(--bg); color: var(--ink); font: 14px/1.5 var(--sans);
+       padding-left: max(16px, env(safe-area-inset-left, 0px)); padding-right: max(16px, env(safe-area-inset-right, 0px));
+       padding-block: 18px 28px; }
+.wrap { max-width: 1440px; margin: 0 auto; display: grid; gap: 14px; }
+header { display: flex; flex-wrap: wrap; align-items: flex-end; gap: 10px 24px; }
+h1 { font-size: 22px; margin: 0; letter-spacing: -0.01em; text-wrap: balance; }
+.sub { color: var(--muted); font-size: 13px; }
+.stats { margin-left: auto; display: flex; gap: 18px; font-family: var(--mono); font-size: 12px; color: var(--muted); }
+.stats b { color: var(--ink); font-size: 16px; display: block; font-variant-numeric: tabular-nums; }
+
+.bar { display: flex; flex-wrap: wrap; gap: 8px 14px; align-items: center; }
+.seg { display: inline-flex; border: 1px solid var(--line); border-radius: 8px; overflow: hidden; background: var(--panel); }
+.seg button { border: 0; background: transparent; color: var(--muted); font: 500 13px var(--sans); padding: 6px 12px; cursor: pointer; }
+.seg button + button { border-left: 1px solid var(--line); }
+.seg button[aria-pressed="true"] { background: var(--ink); color: var(--panel); }
+.lbl { font-size: 11px; text-transform: uppercase; letter-spacing: .08em; color: var(--muted); }
+.btn { border: 1px solid var(--line); background: var(--panel); color: var(--ink); font: 500 13px var(--sans);
+       padding: 6px 11px; border-radius: 8px; cursor: pointer; }
+.btn:hover, .seg button:hover { color: var(--ink); }
+.btn[aria-pressed="true"] { border-color: var(--hi); color: var(--hi); box-shadow: inset 0 0 0 1px var(--hi); }
+input[type=search] { font: 13px var(--mono); padding: 6px 10px; border: 1px solid var(--line); border-radius: 8px;
+                     background: var(--panel); color: var(--ink); width: 220px; max-width: 100%; }
+:focus-visible { outline: 2px solid var(--hi); outline-offset: 2px; }
+
+.main { display: grid; grid-template-columns: minmax(0, 1fr) 340px; gap: 14px; align-items: start; }
+.canvas { position: relative; background: var(--panel); border: 1px solid var(--line); border-radius: 12px; overflow: hidden;
+          height: min(78vh, 820px); min-height: 420px; min-width: 0;
+          background-image: radial-gradient(var(--grid) 1px, transparent 1px); background-size: 18px 18px; }
+svg#g { width: 100%; height: 100%; display: block; cursor: grab; touch-action: none; user-select: none; }
+svg#g.dragging { cursor: grabbing; }
+.zoom { position: absolute; right: 10px; bottom: 10px; display: flex; flex-direction: column; gap: 4px; }
+.zoom button { width: 32px; height: 32px; border: 1px solid var(--line); border-radius: 7px; background: var(--panel);
+               color: var(--ink); font: 600 15px var(--sans); cursor: pointer; }
+.hint { position: absolute; left: 12px; bottom: 10px; font-size: 12px; color: var(--muted); background: var(--panel);
+        padding: 3px 8px; border-radius: 6px; border: 1px solid var(--line); }
+
+/* graph marks */
+.edge { fill: none; stroke: var(--edge); stroke-width: 1.3; transition: opacity .15s; }
+.edge.proc, .edge.file, .edge.http { stroke-dasharray: 5 4; }
+.edge.down { stroke: var(--hi); stroke-width: 2; }
+.edge.up { stroke: var(--up); stroke-width: 2; }
+.node rect { fill: var(--node); stroke: var(--node-line); stroke-width: 1; transition: opacity .15s; }
+.node text { font: 500 12px var(--mono); fill: var(--ink); }
+.node .ln { font: 400 10px var(--mono); fill: var(--muted); }
+.node { cursor: pointer; transition: opacity .15s; }
+.node:hover rect { stroke: var(--ink); }
+.node.sel rect { stroke: var(--hi); stroke-width: 2.4; }
+.node.down rect { stroke: var(--hi); stroke-width: 1.6; }
+.node.up rect { stroke: var(--up); stroke-width: 1.6; }
+.dimmed .node:not(.sel):not(.down):not(.up), .dimmed .edge:not(.down):not(.up) { opacity: var(--dim); }
+.arrow path { fill: var(--edge); } .arrow-down path { fill: var(--hi); } .arrow-up path { fill: var(--up); }
+.elabel { font: 500 10px var(--mono); fill: var(--muted); }
+
+/* panel */
+aside { background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 16px; display: grid; gap: 14px;
+        min-width: 0; max-height: min(78vh, 820px); overflow: auto; }
+aside h2 { margin: 0; font: 600 16px var(--mono); word-break: break-word; }
+.meta { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; font-size: 12px; color: var(--muted); }
+.tag { display: inline-flex; align-items: center; gap: 6px; padding: 1px 8px; border-radius: 99px; background: var(--chip); font-size: 12px; }
+.dot { width: 9px; height: 9px; border-radius: 50%; flex: none; }
+.desc { margin: 0; }
+.list h3 { margin: 0 0 6px; font-size: 11px; text-transform: uppercase; letter-spacing: .08em; color: var(--muted); display: flex; gap: 8px; align-items: center; }
+.list h3 i { width: 18px; height: 3px; border-radius: 2px; display: inline-block; }
+.chips { display: flex; flex-wrap: wrap; gap: 6px; }
+.chips button { font: 12px var(--mono); border: 1px solid var(--line); background: var(--bg); color: var(--ink);
+                padding: 3px 8px; border-radius: 6px; cursor: pointer; display: inline-flex; gap: 6px; align-items: center; }
+.chips button:hover { border-color: var(--ink); }
+.chips em { color: var(--muted); font-style: normal; font-size: 11px; }
+.none { color: var(--muted); font-size: 13px; }
+.legend { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 4px 12px; font-size: 12px; }
+.legend button { all: unset; display: flex; gap: 7px; align-items: center; cursor: pointer; padding: 2px 0; color: var(--ink); }
+.legend button:focus-visible { outline: 2px solid var(--hi); }
+.legend .n { color: var(--muted); font-family: var(--mono); margin-left: auto; padding-right: 6px; }
+.keys { display: grid; gap: 6px; font-size: 12px; color: var(--muted); }
+.keys div { display: flex; gap: 10px; align-items: center; }
+.keys svg { flex: none; }
+.trace-note { font-size: 13px; padding: 8px 10px; border-radius: 8px; background: var(--chip); }
+
+@media (max-width: 900px) {
+  .main { grid-template-columns: minmax(0, 1fr); }
+  .canvas { height: 62vh; min-height: 360px; }
+  aside { max-height: none; }
+  .stats { margin-left: 0; }
+  .hint { display: none; }
+}
+@media (prefers-reduced-motion: reduce) { * { transition: none !important; } }
+</style>
+
+<div class="wrap">
+  <header>
+    <div>
+      <h1>Recon Call Graph</h1>
+      <div class="sub">Who calls whom in <code>recon.py</code> and <code>app.py</code>. Click a function to follow its calls.</div>
+    </div>
+    <div class="stats" aria-label="Graph size">
+      <div><b id="s-nodes">0</b>functions shown</div>
+      <div><b id="s-edges">0</b>calls shown</div>
+    </div>
+  </header>
+
+  <div class="bar" role="toolbar" aria-label="Graph controls">
+    <span class="lbl">Show</span>
+    <div class="seg" id="views">
+      <button id="v-all" data-view="all" aria-pressed="true">Whole system</button>
+      <button id="v-engine" data-view="engine" aria-pressed="false">Engine · recon.py</button>
+      <button id="v-web" data-view="web" aria-pressed="false">Web app · app.py</button>
+    </div>
+    <span class="lbl">Trace</span>
+    <button class="btn" id="t-run" data-trace="run" aria-pressed="false">Normal run</button>
+    <button class="btn" id="t-check" data-trace="check" aria-pressed="false">--check</button>
+    <button class="btn" id="t-browser" data-trace="browser" aria-pressed="false">Run from browser</button>
+    <input type="search" id="find" list="names" placeholder="Find a function…" aria-label="Find a function">
+    <datalist id="names"></datalist>
+  </div>
+
+  <div class="main">
+    <div class="canvas">
+      <svg id="g" role="img" aria-label="Function call graph"></svg>
+      <div class="zoom">
+        <button id="z-in" title="Zoom in" aria-label="Zoom in">+</button>
+        <button id="z-out" title="Zoom out" aria-label="Zoom out">−</button>
+        <button id="z-fit" title="Fit to screen" aria-label="Fit to screen">⤢</button>
+      </div>
+      <div class="hint">Click a function to zoom in · drag to pan · scroll to zoom · ⤢ shows everything</div>
+    </div>
+    <aside id="panel" aria-live="polite"></aside>
+  </div>
+</div>
+
+<script>
+(function () {
+"use strict";
+/* ---------------------------------------------------------------- data */
+var GROUPS = {
+  cli:     { name: "Entry & CLI",            file: "recon.py" },
+  conn:    { name: "Connections",            file: "recon.py" },
+  config:  { name: "Config checks",          file: "recon.py" },
+  sql:     { name: "SQL builders",           file: "recon.py" },
+  dialect: { name: "SQL dialects",           file: "recon.py" },
+  compare: { name: "Normalise & compare",    file: "recon.py" },
+  engine:  { name: "Reconciler engine",      file: "recon.py" },
+  report:  { name: "Reports",                file: "recon.py" },
+  web:     { name: "Startup & security",     file: "app.py" },
+  route:   { name: "Pages & API",            file: "app.py" },
+  jobs:    { name: "Job runner",             file: "app.py" },
+  results: { name: "Results & config",       file: "app.py" },
+  browser: { name: "Browser actions",        file: "templates" }
+};
+// [id, label, group, line, description]
+var N = [
+  ["r.main", "recon.main()", "cli", 1153, "CLI entry point. Parses arguments, loads .env, reads the config, then: --check tests connections; --show-sql prints SQL; otherwise runs every table in parallel and writes Excel, HTML, CSV, JSON and the RECON_* tables. Exit code 0 matched, 1 differences, 2 error."],
+  ["r.load_env_file", "load_env_file()", "cli", 1131, "Reads KEY=VALUE lines from .env into the environment without overriding variables already set. Used by both recon.py and app.py."],
+  ["r.check_connections", "check_connections()", "cli", 1113, "For --check: opens every connection, runs SELECT 1 (FROM DUAL on Oracle) and prints OK or FAIL with a plain-language fix."],
+  ["r.connection_hint", "connection_hint()", "cli", 1068, "Turns a driver error (unknown host, missing ODBC driver, wrong password, wrong service name, timeout, thick mode) into the fix to apply."],
+
+  ["r.Database", "Database()", "conn", 166, "One configured connection. Picks the SQL dialect and creates a pooled SQLAlchemy engine (SQLite files are opened read-only per query)."],
+  ["r.Database._url", "Database._url()", "conn", 211, "Builds the connection URL from the config fields (or uses url:), refusing any field still set to xxxx. Passwords are escaped by URL.create."],
+  ["r.Database._password", "Database._password()", "conn", 199, "Reads the password from the environment variable named in password_env; clear error if missing or still a placeholder."],
+  ["r.Database.query", "Database.query()", "conn", 250, "Runs one read-only SELECT and returns all rows. Every database round trip in the tool goes through here."],
+  ["r.Database.write_tables", "Database.write_tables()", "conn", 261, "Appends RECON_SUMMARY, RECON_PARTITIONS and RECON_DIFFERENCES in one transaction: a run is saved completely or not at all."],
+
+  ["r.build_spec", "build_spec()", "config", 360, "Validates one tables: block and returns a TableSpec: maps source/target names for keys, columns and partition, applies defaults and combines filters."],
+  ["r._check_placeholders", "_check_placeholders()", "config", 328, "Walks a table block and stops on the first value still set to xxxx, naming it."],
+  ["r.is_placeholder", "is_placeholder()", "config", 324, "True for strings made only of x/X, three or more long."],
+  ["r._check_ident", "_check_ident()", "config", 347, "Requires a safe table/column name (name, schema.table, \"quoted\" or [bracketed]). Blocks SQL injection through names."],
+  ["r._check_filter", "_check_filter()", "config", 354, "Rejects filters containing ; -- or /* so a filter can only be a single condition."],
+  ["r._pairs", "_pairs()", "config", 317, "Normalises keys: into (source_name, target_name) pairs from a list or a mapping."],
+
+  ["r.profile_sql", "profile_sql()", "sql", 495, "Level 1/2 query: one GROUP BY partition per side computing all metrics in a single scan."],
+  ["r.bucket_sql", "bucket_sql()", "sql", 509, "Same metrics grouped by key bucket inside one partition (level 3 drill-down)."],
+  ["r.fetch_sql", "fetch_sql()", "sql", 517, "Selects key and compared columns for rows in the given buckets of one partition."],
+  ["r._metric_exprs", "_metric_exprs()", "sql", 461, "The single definition of every metric: per-row expressions, their aggregates and readable names (sum(PREMIUM), text_sig(STATUS) …)."],
+  ["r._part_expr", "_part_expr()", "sql", 438, "Partition key expression: day or month text, or the raw column for grain: value."],
+  ["r._where", "_where()", "sql", 433, "Joins the side's filter and extra conditions into a WHERE clause."],
+  ["r.partition_filter", "partition_filter()", "sql", 443, "WHERE condition for one partition, as an index-friendly range (col >= start AND col < next)."],
+  ["r._lit", "_lit()", "sql", 425, "Python value to SQL literal (NULL, number, or quoted text with ' escaped)."],
+
+  ["r.text_len", "Dialect.text_len()", "dialect", 72, "SQL for the length of trimmed text with '' treated as NULL. Summed per partition to catch truncation and value changes."],
+  ["r.text_sig", "Dialect.text_sig()", "dialect", 76, "SQL for a cheap content signature (codes of 1st, 2nd and last character) to catch same-length changes like LAPSED → PAIDUP."],
+  ["r.bucket_expr", "Dialect.bucket_expr()", "dialect", 85, "SQL that puts each key in bucket 0..n-1 identically on every engine: MOD for number keys, weighted last-4-character codes for text keys."],
+  ["r.primitives", "Dialect primitives ×16", "dialect", 54, "Small per-engine SQL pieces: mod, trim, length, ascii, substr, concat, right, to_day, fmt_day, fmt_month, date_lit, num, bigint, upper, epoch_days, epoch_secs. Oracle, SQL Server, PostgreSQL, MySQL and SQLite each override what differs. Reached through side.d, chosen from type: in the config."],
+
+  ["r._metric_equal", "_metric_equal()", "compare", 562, "Decides if one metric matches: sums allow rounding + tolerance × rows, dates compare as text, everything else must be exact."],
+  ["r._to_metric_map", "_to_metric_map()", "compare", 583, "Profile rows → {partition: (raw value, {metric: value})}."],
+  ["r._norm_scalar", "_norm_scalar()", "compare", 535, "Makes one value comparable across drivers: Decimal → float, NaN → None, dates → ISO text, '' → None."],
+  ["r._norm_date_str", "_norm_date_str()", "compare", 552, "Formats any date-like value as YYYY-MM-DD (or with time)."],
+  ["r._norm_frame", "_norm_frame()", "compare", 595, "Cleans fetched rows with the same rules the SQL metrics use: trim, '' → NULL, round to scale, upper-case if ignore_case, date only."],
+
+  ["r.run", "Reconciler.run()", "engine", 679, "Public entry for one table. Catches any error so one failing table never stops the others; records duration."],
+  ["r._run", "Reconciler._run()", "engine", 691, "Main algorithm: profile both sides, compare every partition, then for mismatches drill down, spot check and merge moved rows."],
+  ["r._both", "Reconciler._both()", "engine", 673, "Runs the source and target query at the same time in a 2-thread pool."],
+  ["r._filters", "Reconciler._filters()", "engine", 768, "Partition WHERE condition for each side (names and dialects can differ)."],
+  ["r._drill", "Reconciler._drill()", "engine", 773, "Level 3 for one partition: split into buckets, compare bucket fingerprints, fetch only differing buckets in batches."],
+  ["r._spot_check", "Reconciler._spot_check()", "engine", 806, "Row-compares a few random buckets of matched partitions every run, to catch what aggregates cannot see."],
+  ["r._fetch_and_diff", "Reconciler._fetch_and_diff()", "engine", 830, "Fetch rows of the given buckets from both sides in parallel, normalise them, diff them."],
+  ["r._diff", "Reconciler._diff()", "engine", 850, "Row comparison: duplicate keys, outer merge on keys (MISSING / EXTRA), then per-column VALUE_MISMATCH."],
+  ["r._record", "Reconciler._record()", "engine", 843, "Counts a difference and keeps the detail row while under max_diff_rows."],
+  ["r._merge_moved_rows", "Reconciler._merge_moved_rows()", "engine", 741, "A key MISSING in one partition and EXTRA in another becomes one MOVED_PARTITION row."],
+
+  ["r.build_frames", "build_frames()", "report", 888, "Results → summary, partitions and differences DataFrames. The single place report columns are defined."],
+  ["r.db_frame", "db_frame()", "report", 925, "Prepares a frame for the database: RUN_TIME, reserved-word-safe UPPER names, NULLs, 4,000-char cap."],
+  ["r.write_json", "write_json()", "report", 943, "Writes recon_<run_id>.json atomically. The web app reads this file."],
+  ["r.write_excel", "write_excel()", "report", 957, "Excel report with four sheets and status colours. Forces data cells to text (no formula injection)."],
+  ["r.write_html", "write_html()", "report", 988, "Self-contained HTML report; all values escaped."],
+
+  ["a.main", "app.main()", "web", 530, "Web app entry: loads .env, parses logins, refuses network access without logins, marks stale jobs INTERRUPTED, starts the server."],
+  ["a._parse_users", "_parse_users()", "web", 257, "Parses UI_USERS / UI_VIEWERS (name:pass,name:pass)."],
+  ["a.guard", "guard()", "web", 301, "Runs before every request: host check, login lockout, HTTP Basic login, same-origin check on POST, viewers cannot POST."],
+  ["a._host_allowed", "_host_allowed()", "web", 273, "Blocks DNS rebinding: only localhost (no logins) or UI_ALLOWED_HOSTS names."],
+  ["a._too_many_failures", "_too_many_failures()", "web", 287, "True after 10 wrong passwords from one IP within 15 minutes."],
+  ["a._record_failure", "_record_failure()", "web", 295, "Notes a failed login for the lockout window."],
+  ["a.security_headers", "security_headers()", "web", 340, "After every request: CSP, X-Frame-Options DENY, nosniff, no-store on pages."],
+  ["a.common", "common()", "web", 355, "Gives every template the user, role, running job and config path."],
+
+  ["a.dashboard", "dashboard()  GET /", "route", 364, "Tables with latest status, KPI counts, last connection test and recent activity."],
+  ["a.run", "run()  POST /run", "route", 383, "Keeps only table names that exist in the config, validates the level, starts a run job, redirects to its live log."],
+  ["a.check", "check()  POST /check", "route", 397, "Starts a connection test job (recon.py --check)."],
+  ["a.job_page", "job_page()  GET /jobs/<id>", "route", 405, "Live log page; its script polls job_api."],
+  ["a.job_api", "job_api()  GET /api/jobs/<id>", "route", 414, "JSON status, log tail, duration and whether results exist. Polled every 1.5 s."],
+  ["a.job_stop", "job_stop()  POST /jobs/<id>/stop", "route", 423, "Terminates the running recon.py process and notes who stopped it."],
+  ["a.runs_page", "runs_page()  GET /runs", "route", 434, "History of every run (browser, command line, scheduler) and connection tests."],
+  ["a.run_detail", "run_detail()  GET /runs/<id>", "route", 440, "Results of one run: summary, mismatched partitions, filterable differences, downloads."],
+  ["a.download", "download()  GET /download/<f>", "route", 456, "Sends recon_<id>.xlsx / .html or recon_history.csv; any other name is 404."],
+  ["a.config_page", "config_page()  GET /config", "route", 464, "Read-only view of connections (password keys removed) and table pairs."],
+
+  ["a.start_job", "start_job()", "jobs", 134, "Refuses if a job is running, records the job, starts recon.py with subprocess.Popen (argument list, no shell) and a watcher thread."],
+  ["a.wait", "start_job → wait() thread", "jobs", 170, "Waits for the recon.py process, maps its exit code to MATCHED / MISMATCH / ERROR / OK / FAILED / STOPPED."],
+  ["a.update_job", "update_job()", "jobs", 111, "Under a lock, merges changes into one job and saves."],
+  ["a.read_jobs", "read_jobs()", "jobs", 96, "Loads ui_jobs.json (empty list if missing)."],
+  ["a.save_jobs", "save_jobs()", "jobs", 104, "Writes the last 500 jobs atomically."],
+  ["a._jobs_file", "_jobs_file()", "jobs", 92, "Path of ui_jobs.json in the output folder."],
+  ["a.get_job", "get_job()", "jobs", 120, "One job by id."],
+  ["a.running_job", "running_job()", "jobs", 124, "The job currently RUNNING, if any."],
+  ["a.log_path", "log_path()", "jobs", 128, "Path of ui_logs/<job id>.log."],
+  ["a.tail", "tail()", "jobs", 188, "Last 600 lines of a log file."],
+
+  ["a.load_cfg", "load_cfg()", "results", 63, "Reads recon_config.yaml fresh on every call, so edits show without a restart."],
+  ["a.output_dir", "output_dir()", "results", 68, "Absolute output folder from the config (relative to the config's folder)."],
+  ["a.table_list", "table_list()", "results", 75, "Table pairs flattened into display rows."],
+  ["a.run_files", "run_files()", "results", 200, "recon_*.json files, newest first."],
+  ["a.load_run", "load_run()", "results", 206, "Validates the run id, then loads recon_<id>.json written by recon.py."],
+  ["a.overall", "overall()", "results", 216, "Rolls table statuses up to a run status: ERROR > MISMATCH > MATCHED."],
+  ["a.runs_overview", "runs_overview()", "results", 224, "One row per run with who started it and counts by status."],
+  ["a.latest_per_table", "latest_per_table()", "results", 246, "Most recent result of each table, for the dashboard."],
+
+  ["b.runform", "Run selected (button)", "browser", 0, "Dashboard form: ticked tables + level, posted to /run."],
+  ["b.checkbtn", "Test connections (button)", "browser", 0, "Dashboard button posted to /check."],
+  ["b.poll", "poll() · job.html", "browser", 0, "Browser script on the live log page: fetches /api/jobs/<id> every 1.5 s and updates the log, status and buttons."],
+  ["b.stop", "Stop (button)", "browser", 0, "Live log page button posted to /jobs/<id>/stop."]
+];
+// [from, to, kind]  kind: call (default) | proc (starts a process) | file (reads a file written by) | http (browser request)
+var E = [
+  ["r.main","r.load_env_file"],["r.main","r.check_connections"],["r.main","r.Database"],["r.main","r.build_spec"],
+  ["r.main","r.profile_sql"],["r.main","r.bucket_sql"],["r.main","r.run"],["r.main","r.build_frames"],
+  ["r.main","r.write_excel"],["r.main","r.write_html"],["r.main","r.write_json"],["r.main","r.db_frame"],["r.main","r.Database.write_tables"],
+  ["r.check_connections","r.Database"],["r.check_connections","r.Database.query"],["r.check_connections","r.connection_hint"],
+  ["r.Database","r.Database._url"],["r.Database._url","r.is_placeholder"],["r.Database._url","r.Database._password"],["r.Database._password","r.is_placeholder"],
+  ["r.build_spec","r._check_placeholders"],["r.build_spec","r._check_ident"],["r.build_spec","r._check_filter"],["r.build_spec","r._pairs"],
+  ["r._check_placeholders","r.is_placeholder"],
+  ["r.run","r._run"],
+  ["r._run","r.profile_sql"],["r._run","r._both"],["r._run","r._to_metric_map"],["r._run","r._metric_equal"],
+  ["r._run","r._drill"],["r._run","r._spot_check"],["r._run","r._merge_moved_rows"],
+  ["r._both","r.Database.query"],
+  ["r._drill","r._filters"],["r._drill","r.bucket_sql"],["r._drill","r._both"],["r._drill","r._metric_equal"],["r._drill","r._fetch_and_diff"],
+  ["r._spot_check","r._fetch_and_diff"],
+  ["r._fetch_and_diff","r._filters"],["r._fetch_and_diff","r.fetch_sql"],["r._fetch_and_diff","r._both"],
+  ["r._fetch_and_diff","r._norm_frame"],["r._fetch_and_diff","r._diff"],
+  ["r._diff","r._record"],
+  ["r._filters","r.partition_filter"],["r.partition_filter","r._lit"],["r.partition_filter","r.primitives"],
+  ["r.profile_sql","r._metric_exprs"],["r.profile_sql","r._part_expr"],["r.profile_sql","r._where"],
+  ["r.bucket_sql","r.bucket_expr"],["r.bucket_sql","r._metric_exprs"],["r.bucket_sql","r._where"],
+  ["r.fetch_sql","r.bucket_expr"],["r.fetch_sql","r.primitives"],["r.fetch_sql","r._where"],
+  ["r._metric_exprs","r.text_len"],["r._metric_exprs","r.text_sig"],["r._metric_exprs","r.primitives"],
+  ["r._part_expr","r.primitives"],
+  ["r.text_len","r.primitives"],["r.text_sig","r.primitives"],["r.bucket_expr","r.primitives"],
+  ["r._metric_equal","r._norm_date_str"],["r._metric_equal","r._norm_scalar"],["r._to_metric_map","r._norm_scalar"],
+  ["r._norm_frame","r._norm_date_str"],
+
+  ["a.main","r.load_env_file"],["a.main","a._parse_users"],["a.main","a.read_jobs"],["a.main","a.save_jobs"],
+  ["a.guard","a._host_allowed"],["a.guard","a._too_many_failures"],["a.guard","a._record_failure"],
+  ["a.common","a.running_job"],
+  ["a.dashboard","a.load_cfg"],["a.dashboard","a.table_list"],["a.dashboard","a.runs_overview"],["a.dashboard","a.latest_per_table"],["a.dashboard","a.read_jobs"],
+  ["a.run","a.load_cfg"],["a.run","a.table_list"],["a.run","a.start_job"],
+  ["a.check","a.start_job"],
+  ["a.job_page","a.get_job"],["a.job_page","a.tail"],["a.job_page","a.log_path"],["a.job_page","a.load_run"],
+  ["a.job_api","a.get_job"],["a.job_api","a.tail"],["a.job_api","a.log_path"],["a.job_api","a.load_run"],
+  ["a.job_stop","a.log_path"],
+  ["a.runs_page","a.runs_overview"],["a.runs_page","a.read_jobs"],
+  ["a.run_detail","a.load_run"],["a.run_detail","a.get_job"],["a.run_detail","a.overall"],["a.run_detail","a.output_dir"],
+  ["a.download","a.output_dir"],
+  ["a.config_page","a.load_cfg"],["a.config_page","a.table_list"],
+  ["a.start_job","a.read_jobs"],["a.start_job","a.save_jobs"],["a.start_job","a.log_path"],["a.start_job","a.update_job"],
+  ["a.start_job","a.wait"],["a.start_job","r.main","proc"],
+  ["a.wait","a.update_job"],
+  ["a.update_job","a.read_jobs"],["a.update_job","a.save_jobs"],
+  ["a.get_job","a.read_jobs"],["a.running_job","a.read_jobs"],
+  ["a.read_jobs","a._jobs_file"],["a.save_jobs","a._jobs_file"],
+  ["a._jobs_file","a.output_dir"],["a.log_path","a.output_dir"],["a.run_files","a.output_dir"],["a.load_run","a.output_dir"],
+  ["a.output_dir","a.load_cfg"],
+  ["a.runs_overview","a.read_jobs"],["a.runs_overview","a.run_files"],["a.runs_overview","a.overall"],
+  ["a.load_run","r.write_json","file"],["a.run_files","r.write_json","file"],
+
+  ["b.runform","a.run","http"],["b.checkbtn","a.check","http"],["b.poll","a.job_api","http"],["b.stop","a.job_stop","http"]
+];
+var KIND_LABEL = { proc: "starts process", file: "reads file of", http: "HTTP request" };
+var TRACES = {
+  run: { start: "r.main", note: "A normal run: recon.py → read config → build specs → compare every table → write reports. (--check and --show-sql branches are left out.)",
+         skip: ["r.check_connections", "r.connection_hint"] },
+  check: { nodes: ["r.main", "r.load_env_file", "r.check_connections", "r.Database", "r.Database._url", "r.Database._password",
+                   "r.is_placeholder", "r.Database.query", "r.connection_hint"],
+           note: "recon.py --check: open every connection, run SELECT 1, explain any failure." },
+  browser: { nodes: ["b.runform", "a.run", "a.load_cfg", "a.table_list", "a.start_job", "a.read_jobs", "a.save_jobs", "a._jobs_file",
+                     "a.output_dir", "a.log_path", "a.update_job", "a.wait", "r.main"],
+             note: "Clicking Run selected: the form posts to /run, which validates and starts recon.py as a separate process. From recon.main() the normal run continues (use the Normal run trace)." }
+};
+
+/* ---------------------------------------------------------------- state */
+var nodeById = {}; N.forEach(function (n) { nodeById[n[0]] = { id: n[0], label: n[1], group: n[2], line: n[3], desc: n[4] }; });
+var edges = E.map(function (e) { return { from: e[0], to: e[1], kind: e[2] || "call" }; });
+var view = "all", selected = null, trace = null;
+var svg = document.getElementById("g"), panel = document.getElementById("panel");
+var NS = "http://www.w3.org/2000/svg";
+var vb = { x: 0, y: 0, w: 1000, h: 700 }, bounds = null, layoutNodes = {};
+
+function inView(id) {
+  var f = id.charAt(0);
+  if (view === "all") return true;
+  if (view === "engine") return f === "r";
+  return f === "a" || f === "b" || id === "r.main" || id === "r.load_env_file" || id === "r.write_json";
+}
+function groupColor(g) { return "var(--g-" + g + ")"; }
+function el(tag, attrs, parent) {
+  var x = document.createElementNS(NS, tag);
+  for (var k in attrs) x.setAttribute(k, attrs[k]);
+  if (parent) parent.appendChild(x);
+  return x;
+}
+
+/* ---------------------------------------------------------------- layout + draw */
+// Layered left-to-right layout: column = longest call path from an entry point,
+// order inside a column = repeated barycenter sweeps to reduce crossings.
+var NODE_H = 30, ROW = 40, COL_GAP = 60;
+function nodeWidth(n) { return Math.max(120, Math.round(n.label.length * 7.3 + 44)); }
+function layout(ids, vis) {
+  var preds = {}, succs = {}, rank = {};
+  ids.forEach(function (id) { preds[id] = []; succs[id] = []; });
+  vis.forEach(function (e) { succs[e.from].push(e.to); preds[e.to].push(e.from); });
+  function rk(id, stack) {
+    if (rank[id] !== undefined) return rank[id];
+    stack[id] = true;
+    var r = 0;
+    preds[id].forEach(function (p) { if (!stack[p]) r = Math.max(r, rk(p, stack) + 1); });
+    delete stack[id];
+    return (rank[id] = r);
+  }
+  ids.forEach(function (id) { rk(id, {}); });
+  var cols = [];
+  ids.forEach(function (id) { (cols[rank[id]] = cols[rank[id]] || []).push(id); });
+  var gorder = Object.keys(GROUPS);
+  cols.forEach(function (c) { c.sort(function (a, b) {
+    return gorder.indexOf(nodeById[a].group) - gorder.indexOf(nodeById[b].group) || (nodeById[a].line - nodeById[b].line); }); });
+  var pos = {};
+  function index() { cols.forEach(function (c) { c.forEach(function (id, i) { pos[id] = i - (c.length - 1) / 2; }); }); }
+  index();
+  for (var it = 0; it < 12; it++) {
+    var down = it % 2 === 0;
+    var seq = down ? cols : cols.slice().reverse();
+    seq.forEach(function (c) {
+      var bc = {};
+      c.forEach(function (id) {
+        var nb = down ? preds[id] : succs[id];
+        bc[id] = nb.length ? nb.reduce(function (s, x) { return s + pos[x]; }, 0) / nb.length : pos[id];
+      });
+      c.sort(function (a, b) { return bc[a] - bc[b]; });
+      c.forEach(function (id, i) { pos[id] = i - (c.length - 1) / 2; });
+    });
+  }
+  var out = {}, x = 20, maxRows = Math.max.apply(null, cols.map(function (c) { return c.length; }));
+  cols.forEach(function (c) {
+    var w = Math.max.apply(null, c.map(function (id) { return nodeWidth(nodeById[id]); }));
+    var top = 20 + (maxRows - c.length) * ROW / 2;
+    c.forEach(function (id, i) { out[id] = { x: x, y: top + i * ROW, width: nodeWidth(nodeById[id]), height: NODE_H }; });
+    x += w + COL_GAP;
+  });
+  return { nodes: out, width: x - COL_GAP + 20, height: maxRows * ROW + 40 };
+}
+function edgePath(a, b) {
+  var x1 = a.x + a.width, y1 = a.y + a.height / 2, x2 = b.x - 2, y2 = b.y + b.height / 2;
+  if (x2 > x1) {
+    var dx = Math.max(36, (x2 - x1) / 2);
+    return { d: "M" + x1 + "," + y1 + " C" + (x1 + dx) + "," + y1 + " " + (x2 - dx) + "," + y2 + " " + x2 + "," + y2,
+             mx: (x1 + x2) / 2, my: (y1 + y2) / 2 };
+  }
+  // backward edge (rare): loop under the boxes
+  var low = Math.max(a.y, b.y) + a.height + 26;
+  return { d: "M" + x1 + "," + y1 + " C" + (x1 + 60) + "," + low + " " + (b.x - 60) + "," + low + " " + x2 + "," + y2,
+           mx: (x1 + b.x) / 2, my: low - 6 };
+}
+function draw() {
+  var ids = Object.keys(nodeById).filter(inView);
+  var vis = edges.filter(function (e) { return inView(e.from) && inView(e.to); });
+  var L = layout(ids, vis);
+
+  svg.innerHTML = "";
+  var defs = el("defs", {}, svg);
+  ["arrow", "arrow-down", "arrow-up"].forEach(function (m) {
+    var mk = el("marker", { id: m, "class": m, viewBox: "0 0 10 10", refX: 9, refY: 5, markerWidth: 7, markerHeight: 7, orient: "auto-start-reverse" }, defs);
+    el("path", { d: "M0,0 L10,5 L0,10 z" }, mk);
+  });
+  var root = el("g", { id: "root" }, svg);
+  var eg = el("g", {}, root), ng = el("g", {}, root);
+
+  layoutNodes = L.nodes;
+  edges.forEach(function (e) { e.el = null; });
+  vis.forEach(function (e) {
+    var pth = edgePath(L.nodes[e.from], L.nodes[e.to]);
+    e.el = el("path", { d: pth.d, "class": "edge " + e.kind, "marker-end": "url(#arrow)" }, eg);
+    if (e.kind !== "call") {
+      var t = el("text", { x: pth.mx, y: pth.my - 6, "text-anchor": "middle", "class": "elabel" }, eg);
+      t.textContent = KIND_LABEL[e.kind];
+    }
+  });
+  Object.keys(nodeById).forEach(function (id) { nodeById[id].el = null; });
+  ids.forEach(function (id) {
+    var n = nodeById[id], p = L.nodes[id];
+    var gx = el("g", { "class": "node", transform: "translate(" + p.x + "," + p.y + ")",
+                       tabindex: 0, role: "button", "aria-label": n.label + ", " + GROUPS[n.group].name, "data-id": id }, ng);
+    el("rect", { width: p.width, height: p.height, rx: 6 }, gx);
+    el("circle", { cx: 14, cy: 15, r: 4.5, fill: groupColor(n.group) }, gx);
+    var t = el("text", { x: 26, y: 19 }, gx); t.textContent = n.label;
+    n.el = gx;
+    gx.addEventListener("click", function () { if (!moved) select(id); });
+    gx.addEventListener("keydown", function (ev) { if (ev.key === "Enter" || ev.key === " ") { ev.preventDefault(); select(id); } });
+  });
+
+  bounds = { x: 0, y: 0, w: L.width, h: L.height };
+  document.getElementById("s-nodes").textContent = ids.length;
+  document.getElementById("s-edges").textContent = vis.length;
+  fit();
+  paint();
+}
+
+/* ---------------------------------------------------------------- highlight */
+function reach(start, dir, skip) {
+  var seen = {}, stack = [start];
+  seen[start] = true;
+  while (stack.length) {
+    var cur = stack.pop();
+    edges.forEach(function (e) {
+      if (!e.el) return;
+      var a = dir === "down" ? e.from : e.to, b = dir === "down" ? e.to : e.from;
+      if (a === cur && !seen[b] && !(skip && skip.indexOf(b) >= 0)) { seen[b] = true; stack.push(b); }
+    });
+  }
+  return seen;
+}
+function paint() {
+  Object.keys(nodeById).forEach(function (id) { var n = nodeById[id]; if (n.el) n.el.setAttribute("class", "node"); });
+  edges.forEach(function (e) { if (e.el) { e.el.setAttribute("class", "edge " + e.kind); e.el.setAttribute("marker-end", "url(#arrow)"); } });
+  var down = {}, up = {}, active = false;
+  if (trace) {
+    var t = TRACES[trace];
+    if (t.start) down = reach(t.start, "down", t.skip);
+    else t.nodes.forEach(function (id) { down[id] = true; });
+    active = true;
+  } else if (selected && nodeById[selected].el) {
+    down = reach(selected, "down"); up = reach(selected, "up"); active = true;
+  }
+  svg.classList.toggle("dimmed", active);
+  if (!active) return;
+  Object.keys(down).forEach(function (id) { var n = nodeById[id]; if (n && n.el) n.el.classList.add(id === selected && !trace ? "sel" : "down"); });
+  Object.keys(up).forEach(function (id) { var n = nodeById[id]; if (n && n.el && id !== selected) n.el.classList.add("up"); });
+  edges.forEach(function (e) {
+    if (!e.el) return;
+    if (down[e.from] && down[e.to]) { e.el.classList.add("down"); e.el.setAttribute("marker-end", "url(#arrow-down)"); }
+    else if (!trace && up[e.from] && up[e.to]) { e.el.classList.add("up"); e.el.setAttribute("marker-end", "url(#arrow-up)"); }
+  });
+}
+
+/* ---------------------------------------------------------------- panel */
+function chip(id, extra) {
+  var n = nodeById[id];
+  return '<button data-go="' + id + '"><span class="dot" style="background:' + groupColor(n.group) + '"></span>' +
+         esc(n.label.split("  ")[0]) + (extra ? " <em>" + esc(extra) + "</em>" : "") + "</button>";
+}
+function esc(s) { return String(s).replace(/[&<>"]/g, function (c) { return { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]; }); }
+function renderPanel() {
+  var html = "";
+  if (trace) {
+    var t = TRACES[trace];
+    html += '<div><span class="lbl">Trace</span><h2>' + esc(document.querySelector('[data-trace="' + trace + '"]').textContent) + "</h2></div>";
+    html += '<p class="trace-note">' + esc(t.note) + "</p>";
+    html += '<p class="none">Highlighted in blue. Click any function for its details, or click the trace button again to clear.</p>';
+  } else if (selected) {
+    var n = nodeById[selected], gr = GROUPS[n.group];
+    var callers = edges.filter(function (e) { return e.to === selected; });
+    var callees = edges.filter(function (e) { return e.from === selected; });
+    html += "<div><h2>" + esc(n.label) + "</h2><div class=\"meta\"><span class=\"tag\"><span class=\"dot\" style=\"background:" +
+            groupColor(n.group) + "\"></span>" + esc(gr.name) + "</span><span>" + esc(gr.file) + (n.line ? " · line ~" + n.line : "") + "</span></div></div>";
+    html += '<p class="desc">' + esc(n.desc) + "</p>";
+    html += '<div class="list"><h3><i style="background:var(--up)"></i>Called by (' + callers.length + ")</h3>" +
+            (callers.length ? '<div class="chips">' + callers.map(function (e) { return chip(e.from, KIND_LABEL[e.kind] ? "(" + KIND_LABEL[e.kind] + ")" : ""); }).join("") + "</div>"
+                            : '<div class="none">Nothing in the code: started by ' + (selected.charAt(0) === "b" ? "a person in the browser" : "Python, Flask or the command line") + ".</div>") + "</div>";
+    html += '<div class="list"><h3><i style="background:var(--hi)"></i>Calls (' + callees.length + ")</h3>" +
+            (callees.length ? '<div class="chips">' + callees.map(function (e) { return chip(e.to, KIND_LABEL[e.kind] ? "(" + KIND_LABEL[e.kind] + ")" : ""); }).join("") + "</div>"
+                            : '<div class="none">No other functions of the tool. A leaf.</div>') + "</div>";
+    if (!n.el) html += '<p class="trace-note">Not shown in this view. Switch to Whole system to see it.</p>';
+  } else {
+    html += '<div><span class="lbl">How to read it</span><h2>Recon call graph</h2></div>';
+    html += '<p class="desc">Each box is a function; each arrow goes from the caller to the function it calls. Flow runs left to right, from entry points to small helpers.</p>';
+    html += '<p class="none">Click a box: what it calls turns blue, everything that leads to it turns orange. Or pick a trace above.</p>';
+  }
+  html += '<div class="list"><h3>Groups</h3><div class="legend">' + Object.keys(GROUPS).map(function (k) {
+    var count = Object.keys(nodeById).filter(function (id) { return nodeById[id].group === k && inView(id); }).length;
+    return count ? '<button data-group="' + k + '"><span class="dot" style="background:' + groupColor(k) + '"></span>' + esc(GROUPS[k].name) + '<span class="n">' + count + "</span></button>" : "";
+  }).join("") + "</div></div>";
+  html += '<div class="list"><h3>Lines</h3><div class="keys">' +
+    '<div><svg width="34" height="8"><line x1="0" y1="4" x2="34" y2="4" stroke="var(--edge)" stroke-width="1.6"/></svg>function call</div>' +
+    '<div><svg width="34" height="8"><line x1="0" y1="4" x2="34" y2="4" stroke="var(--edge)" stroke-width="1.6" stroke-dasharray="5 4"/></svg>starts a process / reads its file / browser request</div>' +
+    '<div><svg width="34" height="8"><line x1="0" y1="4" x2="34" y2="4" stroke="var(--hi)" stroke-width="2.4"/></svg>called from the selection</div>' +
+    '<div><svg width="34" height="8"><line x1="0" y1="4" x2="34" y2="4" stroke="var(--up)" stroke-width="2.4"/></svg>leads to the selection</div></div></div>';
+  panel.innerHTML = html;
+}
+panel.addEventListener("click", function (ev) {
+  var b = ev.target.closest("[data-go]");
+  if (b) { var id = b.getAttribute("data-go"); if (!nodeById[id].el) setView("all"); select(id, true); return; }
+  var g = ev.target.closest("[data-group]");
+  if (g) {
+    var first = Object.keys(nodeById).filter(function (id) { return nodeById[id].group === g.getAttribute("data-group") && nodeById[id].el; })[0];
+    if (first) select(first, true);
+  }
+});
+
+/* ---------------------------------------------------------------- actions */
+function select(id, center) {
+  trace = null; syncTraceButtons();
+  selected = selected === id && !center ? null : id;
+  paint(); renderPanel();
+  if (selected) centerOn(selected); else fit();
+}
+function setView(v) {
+  view = v;
+  document.querySelectorAll("#views button").forEach(function (b) { b.setAttribute("aria-pressed", String(b.getAttribute("data-view") === v)); });
+  draw(); renderPanel();
+}
+function syncTraceButtons() {
+  document.querySelectorAll("[data-trace]").forEach(function (b) { b.setAttribute("aria-pressed", String(b.getAttribute("data-trace") === trace)); });
+}
+document.getElementById("views").addEventListener("click", function (ev) {
+  var b = ev.target.closest("button"); if (b) setView(b.getAttribute("data-view"));
+});
+document.querySelectorAll("[data-trace]").forEach(function (b) {
+  b.addEventListener("click", function () {
+    var t = b.getAttribute("data-trace");
+    if (trace === t) { trace = null; }
+    else {
+      trace = t; selected = null;
+      var need = t === "run" ? "engine" : "all";
+      if (view !== "all" && view !== need) { view = "all"; setView("all"); }
+      else if (t === "browser" && view === "engine") setView("all");
+    }
+    syncTraceButtons(); paint(); renderPanel();
+    if (trace) {
+      var lit = Object.keys(nodeById).filter(function (id) { var n = nodeById[id]; return n.el && n.el.classList.contains("down"); });
+      fitIds(lit, 900);
+    } else fit();
+  });
+});
+var dl = document.getElementById("names");
+Object.keys(nodeById).forEach(function (id) { var o = document.createElement("option"); o.value = nodeById[id].label.split("  ")[0]; dl.appendChild(o); });
+document.getElementById("find").addEventListener("change", function (ev) {
+  var q = ev.target.value.trim().toLowerCase(); if (!q) return;
+  var hit = Object.keys(nodeById).filter(function (id) { return nodeById[id].label.toLowerCase().indexOf(q) >= 0; })[0];
+  if (hit) { if (!nodeById[hit].el) setView("all"); select(hit, true); }
+});
+
+/* ---------------------------------------------------------------- pan / zoom */
+function apply() { svg.setAttribute("viewBox", vb.x + " " + vb.y + " " + vb.w + " " + vb.h); }
+function fit() {
+  var r = svg.getBoundingClientRect(), pad = 24;
+  var w = bounds.w + pad * 2, h = bounds.h + pad * 2, ar = (r.width || 1000) / (r.height || 700);
+  if (w / h > ar) { vb.w = w; vb.h = w / ar; } else { vb.h = h; vb.w = h * ar; }
+  vb.x = bounds.x - pad - (vb.w - w) / 2; vb.y = bounds.y - pad - (vb.h - h) / 2;
+  apply();
+}
+function zoomAt(f, cx, cy) {
+  var nw = Math.min(Math.max(vb.w * f, 200), bounds.w * 4 + 2000);
+  var k = nw / vb.w;
+  vb.x = cx - (cx - vb.x) * k; vb.y = cy - (cy - vb.y) * k; vb.w = nw; vb.h *= k;
+  apply();
+}
+function toSvg(ev) {
+  var r = svg.getBoundingClientRect();
+  return { x: vb.x + (ev.clientX - r.left) / r.width * vb.w, y: vb.y + (ev.clientY - r.top) / r.height * vb.h };
+}
+function fitIds(list, minW) {
+  var ps = list.map(function (id) { return layoutNodes[id]; }).filter(Boolean);
+  if (!ps.length) return;
+  var x0 = Math.min.apply(null, ps.map(function (p) { return p.x; })), y0 = Math.min.apply(null, ps.map(function (p) { return p.y; }));
+  var x1 = Math.max.apply(null, ps.map(function (p) { return p.x + p.width; })), y1 = Math.max.apply(null, ps.map(function (p) { return p.y + p.height; }));
+  var r = svg.getBoundingClientRect(), ar = (r.width || 1000) / (r.height || 700), pad = 40;
+  var w = Math.max(x1 - x0 + pad * 2, minW || 760), h = y1 - y0 + pad * 2;
+  if (w / h > ar) h = w / ar; else w = h * ar;
+  vb = { x: (x0 + x1) / 2 - w / 2, y: (y0 + y1) / 2 - h / 2, w: w, h: h };
+  apply();
+}
+function neighbourhood(id) {
+  var list = [id];
+  edges.forEach(function (e) { if (!e.el) return; if (e.from === id) list.push(e.to); if (e.to === id) list.push(e.from); });
+  return list;
+}
+function centerOn(id) { fitIds(neighbourhood(id)); }
+svg.addEventListener("wheel", function (ev) { ev.preventDefault(); var p = toSvg(ev); zoomAt(ev.deltaY > 0 ? 1.12 : 1 / 1.12, p.x, p.y); }, { passive: false });
+var drag = null, moved = false;
+svg.addEventListener("pointerdown", function (ev) {
+  drag = { x: ev.clientX, y: ev.clientY, vx: vb.x, vy: vb.y }; moved = false;
+});
+window.addEventListener("pointermove", function (ev) {
+  if (!drag) return;
+  var dx = ev.clientX - drag.x, dy = ev.clientY - drag.y;
+  if (!moved && Math.abs(dx) + Math.abs(dy) < 5) return;
+  if (!moved) { moved = true; svg.classList.add("dragging"); try { svg.setPointerCapture(ev.pointerId); } catch (e) {} }
+  var r = svg.getBoundingClientRect();
+  vb.x = drag.vx - dx / r.width * vb.w; vb.y = drag.vy - dy / r.height * vb.h; apply();
+});
+window.addEventListener("pointerup", function () { drag = null; svg.classList.remove("dragging"); setTimeout(function () { moved = false; }, 0); });
+svg.addEventListener("click", function (ev) { if (!moved && !ev.target.closest(".node") && (selected || trace)) { selected = null; trace = null; syncTraceButtons(); paint(); renderPanel(); fit(); } });
+document.getElementById("z-in").onclick = function () { zoomAt(1 / 1.25, vb.x + vb.w / 2, vb.y + vb.h / 2); };
+document.getElementById("z-out").onclick = function () { zoomAt(1.25, vb.x + vb.w / 2, vb.y + vb.h / 2); };
+document.getElementById("z-fit").onclick = fit;
+var rt; window.addEventListener("resize", function () { clearTimeout(rt); rt = setTimeout(fit, 120); });
+
+/* ---------------------------------------------------------------- start */
+draw(); renderPanel();
+})();
+</script>
