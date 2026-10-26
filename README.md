@@ -122,6 +122,10 @@ the PC it runs on; it refuses `--host 0.0.0.0` until `UI_USERS` is set.
   built-in server is used.
 - Logins use HTTP Basic authentication. On a shared network, put the app behind HTTPS
   (IIS reverse proxy or your load balancer) so passwords are not sent in clear text.
+- Only expected host names are served: `localhost` without logins; with logins, add the
+  names people type (e.g. `UI_ALLOWED_HOSTS=recon-srv01,recon-srv01.company.local`) to
+  `.env` to lock it down further.
+- 10 wrong passwords from one computer blocks it for 15 minutes.
 - To keep it running after logoff, run `run_web.bat` as a Windows service (e.g. NSSM) or a
   Task Scheduler task "At startup".
 

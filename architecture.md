@@ -417,6 +417,11 @@ flowchart LR
 - Reports contain key values and data values from mismatches. Treat `recon_output/` and
   `RECON_DIFFERENCES` with the same access controls as the source data.
 - `--show-sql` lets the DBA review every query before the first run.
+- Table, column and key names in the config are checked against a strict name pattern, and
+  filters may not contain `;`, `--` or `/*`, so a config mistake cannot turn into extra SQL
+  statements.
+- Values from the data are always written to Excel as text, never as formulas (protects
+  against formula injection when reports are opened).
 
 ---
 
@@ -543,6 +548,9 @@ sequenceDiagram
 | File access | Downloads limited to `recon_<id>.xlsx/.html` and `recon_history.csv` by exact pattern |
 | Secrets | Database passwords stay in `.env`, read only by `recon.py`; never shown in pages |
 | Transport | Put behind HTTPS (IIS reverse proxy / load balancer) when used over the network |
+| DNS rebinding | Host header must be localhost (no-login mode) or a name in `UI_ALLOWED_HOSTS` |
+| Password guessing | 10 wrong passwords from one IP blocks it for 15 minutes |
+| Browser headers | CSP, `X-Frame-Options: DENY` (no clickjacking), `nosniff`, `Cache-Control: no-store` |
 
 ### 12.5 Hosting
 

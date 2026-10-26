@@ -31,6 +31,7 @@ import logging
 import math
 import os
 import random
+import re
 import sqlite3
 import sys
 import time
@@ -339,9 +340,43 @@ def _check_placeholders(obj, where):
             _check_placeholders(v, where)
 
 
+_IDENT = r'(?:[A-Za-z_][A-Za-z0-9_$#]*|"[^"]+"|\[[^\]]+\])'
+IDENT_RE = re.compile(rf"^{_IDENT}(?:\.{_IDENT}){{0,2}}$")
+
+
+def _check_ident(value, what, where):
+    if not isinstance(value, str) or not IDENT_RE.match(value.strip()):
+        raise ValueError(f"{where}: {what} {value!r} is not a valid table/column name. Use "
+                         f"letters, digits and _ (schema.table allowed), or \"quoted\" / "
+                         f"[bracketed] names.")
+
+
+def _check_filter(value, where):
+    if value and (";" in value or "--" in value or "/*" in value):
+        raise ValueError(f"{where}: filter {value!r} may not contain ';', '--' or '/*'. "
+                         f"A filter must be a single condition like  ISSUE_DATE >= '2025-04-01'.")
+
+
 def build_spec(t: dict, dbs: dict, settings: dict) -> TableSpec:
     name = t["name"]
-    _check_placeholders(t, f"Table '{name}'")
+    where = f"Table '{name}'"
+    _check_placeholders(t, where)
+    for side_key in ("source", "target"):
+        side_cfg = t.get(side_key) or {}
+        _check_ident(side_cfg.get("table"), f"{side_key} table", where)
+        _check_filter(side_cfg.get("filter"), where)
+    _check_filter(t.get("filter"), where)
+    for k in _pairs(t["keys"]):
+        for v in k:
+            _check_ident(v, "key column", where)
+    for cname, cdef in (t.get("columns") or {}).items():
+        _check_ident(cname, "column", where)
+        if isinstance(cdef, dict) and cdef.get("target"):
+            _check_ident(cdef["target"], "target column", where)
+    part = t.get("partition") or {}
+    for k in ("column", "target_column"):
+        if part.get(k):
+            _check_ident(part[k], "partition column", where)
     s_cfg, t_cfg = t["source"], t["target"]
     for side in (s_cfg, t_cfg):
         if side["connection"] not in dbs:
@@ -905,6 +940,20 @@ def db_frame(df: pd.DataFrame, run_ts: str, as_text=False) -> pd.DataFrame:
     return out
 
 
+def write_json(path, run_id, run_ts, level, summary, parts, diffs):
+    """Machine-readable copy of the run, used by the web app."""
+    import json
+
+    def recs(df):
+        return df.astype(object).where(df.notna(), None).to_dict(orient="records")
+    doc = {"run_id": run_id, "run_time": run_ts, "level": level,
+           "summary": recs(summary), "partitions": recs(parts), "differences": recs(diffs)}
+    tmp = path + ".tmp"
+    with open(tmp, "w", encoding="utf-8") as f:
+        json.dump(doc, f, default=str)
+    os.replace(tmp, path)
+
+
 def write_excel(path, summary, parts, diffs):
     from openpyxl.styles import Font, PatternFill
     from openpyxl.utils import get_column_letter
@@ -926,6 +975,10 @@ def write_excel(path, summary, parts, diffs):
                     f = fills.get(row[si - 1].value)
                     if f:
                         row[si - 1].fill = PatternFill("solid", fgColor=f)
+            for row in ws.iter_rows(min_row=2):
+                for c in row:
+                    if c.data_type == "f":   # never let data become a live Excel formula
+                        c.data_type = "s"
             for i, col in enumerate(ws.columns, 1):
                 width = max((len(str(c.value)) for c in list(col)[:500] if c.value is not None),
                             default=8)
@@ -1106,6 +1159,7 @@ def main(argv=None):
     ap.add_argument("--show-sql", action="store_true", help="Print the generated SQL and exit")
     ap.add_argument("--check", action="store_true",
                     help="Test every connection (host, driver, login) and exit")
+    ap.add_argument("--run-id", help="Use this run id (the web app sets it); default: timestamp")
     ap.add_argument("--env-file", help="File with passwords (default: .env next to the config, "
                                        "then .env in the current folder)")
     ap.add_argument("-v", "--verbose", action="store_true")
@@ -1125,6 +1179,9 @@ def main(argv=None):
             log.error("Env file not found: %s", a.env_file)
             return 2
 
+    a.config = os.path.abspath(a.config)
+    # Relative paths in the config (output_dir, sqlite files) are relative to the config's folder
+    os.chdir(os.path.dirname(a.config))
     with open(a.config, encoding="utf-8") as f:
         cfg = yaml.safe_load(f)
     settings = cfg.get("settings") or {}
@@ -1165,7 +1222,7 @@ def main(argv=None):
         return 0
 
     run_ts = dt.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    run_id = dt.datetime.now().strftime("%Y%m%d_%H%M%S")
+    run_id = a.run_id or dt.datetime.now().strftime("%Y%m%d_%H%M%S")
     t0 = time.time()
     with cf.ThreadPoolExecutor(max_workers=int(settings.get("parallel_tables", 4))) as ex:
         results = list(ex.map(lambda sp: Reconciler(sp, settings, level).run(), specs))
@@ -1178,6 +1235,7 @@ def main(argv=None):
     write_html(htm, summary, parts, diffs, run_ts)
     hist = os.path.join(out, "recon_history.csv")
     summary.to_csv(hist, mode="a", header=not os.path.exists(hist), index=False)
+    write_json(os.path.join(out, f"recon_{run_id}.json"), run_id, run_ts, level, summary, parts, diffs)
 
     rcfg = settings.get("results_db")
     db_write_failed = False
@@ -1201,7 +1259,7 @@ def main(argv=None):
         print(f"{r.status:9} {r.name:28} src={r.src_rows:>12,} tgt={r.tgt_rows:>12,} "
               f"{r.seconds:>7.1f}s  {dc}{('  ' + r.error) if r.error else ''}")
     print("=" * 78)
-    print(f"Excel : {xlsx}\nHTML  : {htm}\nHistory: {hist}")
+    print(f"Excel : {xlsx}\nHTML  : {htm}\nHistory: {hist}\nRUN_ID: {run_id}")
 
     if db_write_failed or any(r.status == "ERROR" for r in results):
         return 2

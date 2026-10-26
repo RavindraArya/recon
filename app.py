@@ -50,6 +50,7 @@ STATE = {
     "users": {},           # name -> password (may run)
     "viewers": {},         # name -> password (view only)
     "auth": False,
+    "allowed_hosts": set(),  # extra host names users type in the browser (UI_ALLOWED_HOSTS)
 }
 _jobs_lock = threading.Lock()
 _procs: dict[str, subprocess.Popen] = {}
@@ -263,11 +264,51 @@ def _parse_users(value):
     return users
 
 
+LOCAL_HOSTS = {"localhost", "127.0.0.1", "::1", "[::1]"}
+_failed: dict[str, list[float]] = {}          # ip -> times of failed logins
+_failed_lock = threading.Lock()
+MAX_FAILS, FAIL_WINDOW = 10, 15 * 60          # 10 wrong passwords per 15 min per IP
+
+
+def _host_allowed() -> bool:
+    """Blocks DNS-rebinding: a page on another site that points its own name at this
+    server. Only names we expect may appear in the Host header."""
+    host = request.host.rsplit(":", 1)[0] if not request.host.startswith("[") \
+        else request.host.split("]")[0] + "]"
+    host = host.lower()
+    if host in LOCAL_HOSTS:
+        return True
+    if not STATE["auth"]:
+        return False                          # no logins -> this PC only
+    allowed = STATE["allowed_hosts"]
+    return not allowed or host in allowed
+
+
+def _too_many_failures(ip) -> bool:
+    now = time.time()
+    with _failed_lock:
+        recent = [t for t in _failed.get(ip, []) if now - t < FAIL_WINDOW]
+        _failed[ip] = recent
+        return len(recent) >= MAX_FAILS
+
+
+def _record_failure(ip):
+    with _failed_lock:
+        _failed.setdefault(ip, []).append(time.time())
+
+
 @app.before_request
 def guard():
+    if not _host_allowed():
+        return Response("Unknown host name. Add it to UI_ALLOWED_HOSTS in .env if it is yours.",
+                        400)
     if request.endpoint == "static":
         return None
     if STATE["auth"]:
+        ip = request.remote_addr or "?"
+        if _too_many_failures(ip):
+            return Response("Too many wrong passwords from this computer. Try again in 15 "
+                            "minutes.", 429)
         hdr = request.headers.get("Authorization", "")
         user, ok, can_run = None, False, False
         if hdr.startswith("Basic "):
@@ -279,6 +320,8 @@ def guard():
                 if u in store and hmac.compare_digest(store[u], p):
                     user, ok, can_run = u, True, runner
         if not ok:
+            if hdr:
+                _record_failure(ip)
             return Response("Login required", 401,
                             {"WWW-Authenticate": 'Basic realm="Recon", charset="UTF-8"'})
         g.user, g.can_run = user, can_run
@@ -291,6 +334,21 @@ def guard():
         if not g.can_run:
             abort(403, "Your login can view results but not start or stop runs.")
     return None
+
+
+@app.after_request
+def security_headers(resp):
+    resp.headers.setdefault("X-Frame-Options", "DENY")
+    resp.headers.setdefault("X-Content-Type-Options", "nosniff")
+    resp.headers.setdefault("Referrer-Policy", "same-origin")
+    resp.headers.setdefault(
+        "Content-Security-Policy",
+        "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; "
+        "img-src 'self' data:; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; "
+        "form-action 'self'")
+    if request.endpoint != "static":
+        resp.headers["Cache-Control"] = "no-store"   # pages contain business data
+    return resp
 
 
 @app.context_processor
@@ -485,6 +543,8 @@ def main(argv=None):
     STATE["users"] = _parse_users(os.environ.get("UI_USERS"))
     STATE["viewers"] = _parse_users(os.environ.get("UI_VIEWERS"))
     STATE["auth"] = bool(STATE["users"] or STATE["viewers"])
+    STATE["allowed_hosts"] = {h.strip().lower() for h in
+                              os.environ.get("UI_ALLOWED_HOSTS", "").split(",") if h.strip()}
     local_only = a.host in ("127.0.0.1", "localhost", "::1")
     if not local_only and not STATE["auth"]:
         sys.exit("Refusing to open the app to the network without logins.\n"
